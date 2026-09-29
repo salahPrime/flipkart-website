@@ -1275,6 +1275,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function openLoginModal() {
     const loginModal = document.getElementById('loginModal');
     if (!loginModal) return;
+    setAuthMode('login');
     loginModal.classList.add('active');
     document.body.style.overflow = 'hidden';
   }
@@ -1284,6 +1285,33 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!loginModal) return;
     loginModal.classList.remove('active');
     document.body.style.overflow = '';
+    setAuthMode('login');
+  }
+
+  function setAuthMode(mode) {
+    const loginPanel = document.getElementById('loginFormPanel');
+    const signupPanel = document.getElementById('signupFormPanel');
+    const loginFooter = document.getElementById('loginFooterText');
+    const signupFooter = document.getElementById('signupFooterText');
+    const title = document.querySelector('.login-panel h4');
+    const isSignup = mode === 'signup';
+
+    if (loginPanel) loginPanel.hidden = isSignup;
+    if (signupPanel) signupPanel.hidden = !isSignup;
+    if (loginFooter) loginFooter.hidden = isSignup;
+    if (signupFooter) signupFooter.hidden = !isSignup;
+
+    if (title) {
+      title.textContent = isSignup ? 'Create your account' : 'Choose a login option';
+    }
+
+    if (isSignup) {
+      const signupName = document.getElementById('signupName');
+      if (signupName) signupName.focus();
+    } else {
+      const loginIdentifier = document.getElementById('loginIdentifier');
+      if (loginIdentifier) loginIdentifier.focus();
+    }
   }
 
   function handleLoginOptionSelection(method) {
@@ -1365,6 +1393,72 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function handleSignupSubmit(event) {
+    event.preventDefault();
+
+    const name = document.getElementById('signupName').value.trim();
+    const phone = document.getElementById('signupPhone').value.trim();
+    const email = document.getElementById('signupEmail').value.trim();
+    const password = document.getElementById('signupPassword').value.trim();
+
+    if (!name || !phone || !email || !password) {
+      showToast('Please fill in all account details before continuing.');
+      return;
+    }
+
+    const digitsOnly = phone.replace(/\D/g, '');
+    if (digitsOnly.length !== 10) {
+      showToast('Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      showToast('Please enter a valid email address.');
+      return;
+    }
+
+    if (password.length < 6) {
+      showToast('Password must be at least 6 characters long.');
+      return;
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/signup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name,
+          phone: digitsOnly,
+          email,
+          password
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || 'Unable to create account.');
+      }
+
+      const customer = {
+        name: result.user.name,
+        email: result.user.email || '',
+        phone: result.user.phone || '',
+        method: 'email',
+        lastLogin: new Date().toISOString()
+      };
+
+      saveCustomerSession(customer);
+      updateLoginButtonState();
+      closeLoginModal();
+      showToast(`Welcome, ${customer.name}! Your account is ready.`);
+    } catch (error) {
+      showToast(error.message || 'Could not create the account. Please try again.');
+    }
+  }
+
   function setupEventListeners() {
     const addClickHandler = (id, callback) => {
       const element = document.getElementById(id);
@@ -1399,9 +1493,21 @@ document.addEventListener('DOMContentLoaded', () => {
       loginForm.addEventListener('submit', handleLoginSubmit);
     }
 
-    document.querySelectorAll('[data-auth-action="signup"]').forEach((button) => {
+    const signupForm = document.getElementById('signupForm');
+    if (signupForm) {
+      signupForm.addEventListener('submit', handleSignupSubmit);
+    }
+
+    document.querySelectorAll('[data-auth-action]').forEach((button) => {
       button.addEventListener('click', () => {
-        showToast('Create account is available in the next version.');
+        const action = button.dataset.authAction;
+        if (action === 'signup') {
+          setAuthMode('signup');
+          return;
+        }
+        if (action === 'login') {
+          setAuthMode('login');
+        }
       });
     });
 
