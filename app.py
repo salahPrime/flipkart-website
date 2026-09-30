@@ -10,16 +10,16 @@ from google.oauth2 import id_token
 from database import init_db, get_db_connection
 
 BASE_DIR = Path(__file__).resolve().parent
-
 app = Flask(__name__)
+
+# The storefront and API are served by the same Flask app/origin.
+# CORS remains enabled for local development and external API testing.
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 
-# The Vercel deployment and frontend use the same origin, so CORS is not
-# required there. Keeping CORS enabled also allows local development with
-# Live Server or another localhost frontend.
-CORS(app)
-
+# Initialize the database when the function/container starts.
+# On Vercel, database.py automatically uses /tmp.
 init_db()
 
 
@@ -73,16 +73,18 @@ def login():
         }), 400
 
     conn = get_db_connection()
-    user = conn.execute(
-        """
-        SELECT id, name, email, phone
-        FROM users
-        WHERE (LOWER(email) = LOWER(?) OR phone = ?)
-          AND password = ?
-        """,
-        (identifier, identifier, password),
-    ).fetchone()
-    conn.close()
+    try:
+        user = conn.execute(
+            """
+            SELECT id, name, email, phone
+            FROM users
+            WHERE (LOWER(email) = LOWER(?) OR phone = ?)
+              AND password = ?
+            """,
+            (identifier, identifier, password),
+        ).fetchone()
+    finally:
+        conn.close()
 
     if not user:
         return jsonify({
@@ -138,20 +140,18 @@ def signup():
         }), 400
 
     conn = get_db_connection()
-
-    existing_user = conn.execute(
-        "SELECT id FROM users WHERE LOWER(email) = LOWER(?) OR phone = ?",
-        (email, normalized_phone),
-    ).fetchone()
-
-    if existing_user:
-        conn.close()
-        return jsonify({
-            "status": "error",
-            "message": "An account with this email or phone number already exists."
-        }), 409
-
     try:
+        existing_user = conn.execute(
+            "SELECT id FROM users WHERE LOWER(email) = LOWER(?) OR phone = ?",
+            (email, normalized_phone),
+        ).fetchone()
+
+        if existing_user:
+            return jsonify({
+                "status": "error",
+                "message": "An account with this email or phone number already exists."
+            }), 409
+
         cursor = conn.execute(
             "INSERT INTO users (name, email, phone, password) VALUES (?, ?, ?, ?)",
             (name, email, normalized_phone, password),
@@ -165,7 +165,6 @@ def signup():
         conn.commit()
     except sqlite3.IntegrityError:
         conn.rollback()
-        conn.close()
         return jsonify({
             "status": "error",
             "message": "An account with this email or phone number already exists."
@@ -225,28 +224,29 @@ def google_login():
         }), 401
 
     conn = get_db_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO google_accounts (google_sub, email, name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(google_sub)
+            DO UPDATE SET email = excluded.email, name = excluded.name
+            """,
+            (
+                google_user["sub"],
+                google_user["email"],
+                google_user.get("name") or google_user["email"],
+            ),
+        )
 
-    conn.execute(
-        """
-        INSERT INTO google_accounts (google_sub, email, name)
-        VALUES (?, ?, ?)
-        ON CONFLICT(google_sub)
-        DO UPDATE SET email = excluded.email, name = excluded.name
-        """,
-        (
-            google_user["sub"],
-            google_user["email"],
-            google_user.get("name") or google_user["email"],
-        ),
-    )
+        account = conn.execute(
+            "SELECT id, name, email FROM google_accounts WHERE google_sub = ?",
+            (google_user["sub"],),
+        ).fetchone()
 
-    account = conn.execute(
-        "SELECT id, name, email FROM google_accounts WHERE google_sub = ?",
-        (google_user["sub"],),
-    ).fetchone()
-
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
     return jsonify({
         "status": "success",
